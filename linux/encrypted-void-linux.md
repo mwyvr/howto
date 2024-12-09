@@ -70,6 +70,10 @@ Set the hostname for the installation target:
 
     export TARGETHOSTNAME=yournewhostname
 
+Set the timezone; if you don't know, do it later in the chroot or after installation:
+
+    export TIMEZONE="America/Vancouver"
+
 If `ssh` into the machine, exporting a terminfo variable with a basic type will make the experience better:
 
     export TERM=xterm
@@ -87,7 +91,7 @@ Attempt to deactivate existing volume groups, if any:
 Create a new GPT partition table with a reasonably-sized EFI partition and a
 "crypt" partition taking up the rest of the disk.
 
-    sfdisk --force -w always -W always $DEVICE <<EOF
+    sfdisk --force -w always -W always $DEVICE << EOF
     label: gpt
     name=esp, size=500M, type="EFI System"
     name=crypt
@@ -132,18 +136,15 @@ Prepare for `chroot`:
     # Using the network, perform base installation:
     xbps-install -Sy -R https://repo-fastly.voidlinux.org/current -r /mnt base-system cryptsetup grub-x86_64-efi lvm2
 
-Complete basic configuration:
+Complete basic configuration in the chroot:
 
     # enter the chroot
     xchroot /mnt
 
-Configure the target:
+Setup ownership, permissions and root's password:
 
     chown root:root /
     chmod 755 /
-
-Setup root:
-
     # password required
     passwd root
 
@@ -168,109 +169,60 @@ Locale for **glibc** systems only (not musl):
 Populate `/etc/fstab`; do it manually if your setup is more complex.
 
     cat << EOF > /etc/fstab
-    # <file system>	<dir>			<type>	<options>							<dump>	<pass>
-    tmpfs						/tmp			tmpfs		defaults,nosuid,nodev		0				0
-    /dev/volg/root	/					xfs			defaults								0				0
-    /dev/volg/swap	swap			swap		defaults								0				0
-    /dev/nvme0n1p1	/boot/efi	vfat		defaults								0				0
+    # <file system>   <dir>       <type>  <options>             <dump> <pass>
+    tmpfs             /tmp        tmpfs   defaults,nosuid,nodev   0      0
+    /dev/volg/root    /           xfs     defaults                0      0
+    /dev/volg/swap    swap        swap    defaults                0      0
+    /dev/nvme0n1p1    /boot/efi   vfat    defaults                0      0
     EOF
 
-Configure grub; first:
+## Configure grub and crypttab:
+
+First:
 
     echo "GRUB_ENABLE_CRYPTODISK=y" >> /etc/default/grub
 
-
-# FOLLOWING TB COMPLETED 
-And in grub the value reported by:
-
-blkid -o value -s UUID $CRYPT
-i.e.
-4a71f4bf-3fd3-44e0-8a05-cc95f34568bf
-
-GRUB_CMDLINE_LINUX_DEFAULT="loglevel=4 rd.lvm.vg=volg rd.luks.uuid=4a71f4bf-3fd3-44e0-8a05-cc95f34568bf"
-
-dd bs=1 count=64 if=/dev/urandom of=/boot/volume.key
-cryptsetup luksAddKey $CRYPT /boot/volume.key
-
-
-     chmod 000 /boot/volume.key
-    chmod -R g-rwx,o-rwx /boot
-
-echo "volg    $CRYPT     /boot/volume.key     luks" | tee -a /etc/crypttab
-
-cat <<EOF >/etc/dracut.conf.d/10-crypt.conf
-install_items+=" /boot/volume.key /etc/crypttab "
-EOF
-
-grub-install $DEVICE
-xbps-reconfigure -fa
-
-All done.
-
-    exit
-    umount -R /mnt
-
-
-
-echo "GRUB_ENABLE_CRYPTODISK=y" >> /etc/default/grub
-
-Determine the UUID of the encrypted partition:
+Then, note/copy the value reported by:
 
     blkid -o value -s UUID $CRYPT
-    # 11ad858f-7749-4a2b-8d7c-7300906c778a # something like this
 
-Edit /etc/default/grub and add, per this example, the following to GRUB_CMDLINE_LINUX_DEFAULT:
+It'll be something similar to `4a71f4bf-3fd3-44e0-8a05-ab95f34568bf`. 
 
-  rd.lvm.vg=volg rd.luks.uuid=11ad858f-7749-4a2b-8d7c-7300906c778a
+Edit `/etc/default/grub` such that *your* encrypted partition's UUID is reflected per this **example**:
+
+    # ensure you use the UUID from YOUR partition!
+    GRUB_CMDLINE_LINUX_DEFAULT="loglevel=4 rd.lvm.vg=volg rd.luks.uuid=4a71f4bf-3fd3-44e0-8a05-ab95f34568bf"
 
 ## LUKS Key Setup
+
+Create a key that will be included in the `initramfs` so we don't have to provide our LUKS1 passphrase twice at boot:
 
     dd bs=1 count=64 if=/dev/urandom of=/boot/volume.key
     cryptsetup luksAddKey $CRYPT /boot/volume.key
     chmod 000 /boot/volume.key
     chmod -R g-rwx,o-rwx /boot
 
-    # add the volume.key to crypttab:
+Add the volume.key to crypttab:
+
     echo "volg  $CRYPT  /boot/volume.key  luks" >> /etc/crypttab
 
-    # include the key in the initramfs
+Ensure `dracut` knows to include `volume.key` in the `initramfs`:
+
     mkdir -p /etc/dracut.conf.d
     echo 'install_items+=" /boot/volume.key /etc/crypttab "' >> /etc/dracut.conf.d/10-crypt.conf
 
-## Install Grub
+
+## Install grub
 
     grub-install $DEVICE
-    ln -svf /usr/share/zoneinfo/$LOCALTIME /etc/localtime
+    xbps-reconfigure -fa
 
-## Exit chroot
+## Complete any other configuration steps and reboot
 
+At this point the basic setup is completed.
 
     exit
-    umount -R /media/root
+    umount -R /mnt
 
+`reboot` when ready.
 
-## Post installation configuration
-
-xbps-install xtools NetworkManager
-ln -sv etc
-
-xbps-install -Su void-repo-nonfree
-xbps-install -S
-xbps-install intel-ucode
-
-xbps-reconfigure --force linux6.6 #adjust as needed
-
-
-# As user
-
-    xi turnstile
-    mkdir -p ~/.config/service/dbus
-    ln -s /usr/share/examples/turnstile/dbus.run ~/.config/service/dbus/run
-https://docs.voidlinux.org/config/services/user-services.html
-
-
-## as root
-
-socklog-void chrony seatd
-
-usermod -aG _seatd mw

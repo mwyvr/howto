@@ -74,10 +74,6 @@ Set the timezone; if you don't know, do it later in the chroot or after installa
 
     export TIMEZONE="America/Vancouver"
 
-If `ssh` into the machine, exporting a terminfo variable with a basic type will make the experience better:
-
-    export TERM=xterm
-
 ## Disk Preparation
 
 Attempt to deactivate existing volume groups, if any:
@@ -103,7 +99,7 @@ Creating EFI file system:
 
 Create LUKS1 / dm-crypt encrypted $CRYPT partition/volume for root and swap:
 
-    # pass phrease required
+    # pass phrase required
     cryptsetup luksFormat --type luks1 $CRYPT
 
 Open the encrypted volume:
@@ -193,12 +189,19 @@ Edit `/etc/default/grub` such that *your* encrypted partition's UUID is reflecte
     # ensure you use the UUID from YOUR partition!
     GRUB_CMDLINE_LINUX_DEFAULT="loglevel=4 rd.lvm.vg=volg rd.luks.uuid=4a71f4bf-3fd3-44e0-8a05-ab95f34568bf"
 
+Tip: If `vi` doesn't behave, try:
+
+    TERM=xterm vi /etc/default/grub
+
 ## LUKS Key Setup
 
 Create a key that will be included in the `initramfs` so we don't have to provide our LUKS1 passphrase twice at boot:
 
     dd bs=1 count=64 if=/dev/urandom of=/boot/volume.key
     cryptsetup luksAddKey $CRYPT /boot/volume.key
+
+Protect the key:
+
     chmod 000 /boot/volume.key
     chmod -R g-rwx,o-rwx /boot
 
@@ -219,7 +222,12 @@ Ensure `dracut` knows to include `volume.key` in the `initramfs`:
 
 ## Complete any other configuration steps and reboot
 
-At this point the basic setup is completed.
+At this point the basic setup is completed and you can exit and reboot, however, I'd recommend installing a few more packages to make life easier after a reboot.
+
+
+    xbps-install -y dbus elogind NetworkManager
+
+Enable `dbus` and then `NetworkManager` *after* rebooting into the new system.
 
     exit
     umount -R /mnt
